@@ -1,5 +1,3 @@
-
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -13,7 +11,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.InvalidKeyException;
 import java.security.Key;
@@ -75,7 +72,7 @@ public class FileTransfer
                     // check for other required arguments
                     // args[1] = filename of public key
                     // args[2] = host
-                    // args[3] =  port number
+                    // args[3] = port number
                     if(args.length == 4)
                         // run client 
                         clientMode(args[1], args[2], args[3]);
@@ -99,8 +96,6 @@ public class FileTransfer
         // needed objects
         KeyPairGenerator generator = null;
         KeyPair kpair = null;
-        PrivateKey prKey = null;
-        PublicKey puKey = null;
                 
         try 
         {
@@ -247,6 +242,7 @@ public class FileTransfer
         File file = null;
         SecretKey skey = null;
         File filelocation = null;
+        int seq = -1;
         
         try 
         {
@@ -262,7 +258,7 @@ public class FileTransfer
             skey = keygen.generateKey();
             // set cipher for AES
             cipher = Cipher.getInstance("RSA");
-            // set cipher to wrap prkey
+            // set cipher to wrap public key
             cipher.init(Cipher.WRAP_MODE, pukey);
             // wrap the aes session key (encrypt the aes key using rsa public key)
             cipher.wrap(skey);
@@ -289,7 +285,7 @@ public class FileTransfer
             if(chunksize < 1)
                 // throw exception
                 throw new UnsupportedOperationException();
-            // create a new start ,essage
+            // create a new start message
             start_message = new StartMessage(location, enkey, chunksize);
             // create socket with port number  
             socket = new Socket(host, Integer.parseInt(port));
@@ -314,24 +310,32 @@ public class FileTransfer
             {
                 // the message is a ACK
                 case ACK:
-                    try
-                    {
-                        // get streams from socket
-                        out = socket.getOutputStream();
-                        in = socket.getInputStream();
-
-                    } 
-                    catch (IOException ex) 
-                    {
-                        Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-                    }
-                    
+                    // message is a ack of 0, meaning to start the transfer 
                     if(ack.getSeq() == 0)
                     {
+                        // record seq number
+                        seq = ack.getSeq();
+                        
+                        try
+                        {
+                            // get streams from socket
+                            in_object = new ObjectInputStream(socket.getInputStream());
+                            out_object = new ObjectOutputStream(socket.getOutputStream());
+
+                        } 
+                        catch (IOException ex) 
+                        {
+                            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                        
+                        
+                        
                         // create temp array to hold the chunk size
                         byte[] temp = new byte[chunksize];
                         // used to hold the crc32 value
-                        byte[] crc32;
+                        int crc32 = 0;
+                        // chunk object to send to server
+                        Chunk chunk = null;
                         // counter used to keep track of the chunk elements
                         int counter = 0;
                         // loop the size of the file
@@ -340,54 +344,38 @@ public class FileTransfer
                             // the current byte is size of the chunk
                             if(i % chunksize == 0 && i != 0)
                             {
+                                // since i will stop at the chunk size
+                                // we can't forget that current byte
+                                temp[counter++] = bfile[i];
                                 // get crc32
-                                crc32 = getCRC32(temp);
+                                crc32 = generateCRC32(temp);
+                                // set cipher to deal with aes
+                                cipher = Cipher.getInstance("AES");
+                                // set cipher for wrapping mode using the AESkey
+                                cipher.init(Cipher.WRAP_MODE, skey);
+                                // encrypt this data into new byte array
+                                temp = cipher.doFinal(temp);
+                                //init chunk object
+                                chunk = new Chunk(++seq, temp, crc32);
                                 // send chunk
-                                out.write(temp);
-                                
-                                
-                                
-                                
-                                
-                                
-                                
-                                // wait for server ACK reply
+                                out_object.writeObject(chunk);
+                                // read in next message
                                 message = (Message) in_object.readObject();
-                                System.out.println("Chunk number: " + ((AckMessage)message).getSeq());
-                                
-                                
-                                
+                                // check message type
+                                switch(message.getType()) 
+                                {
+                                    // the message is a ACK
+                                    case ACK:
+                                        System.out.println("Chunk number: " + ((AckMessage)message).getSeq());
+                                        break;
+                                    // anything else is incorrect
+                                    default:
+                                       throw new UnsupportedOperationException();
+                                }   
                             }
                             else
                                 temp[counter++] = bfile[i];
-                            
                         }
-                        
-                        
-                        
-                        
-                        // file to bytes
-                        //FileInputStream test = new FileInputStream(filepath.toFile());
-                        //test.read(file);
-                        // or  file = Files.readAllBytes(filepath);
-                        // bytes to file
-                        //FileOutputStream test2 = new FileOutputStream(filepath.toFile());
-                        //test2.write(file);
-                        //
-                        
-                        //ObjectOutputStream test3 = new ObjectOutputStream(test2);
-                       // test3.
-                       
-                        
-                        
-                        // file to bytes
-                       //                                       
-                      // Files.
-                       // in_object.read(file);
-                       //out_object.write(file);
-                        //File files = filepath.toFile();
-                        //files.
-
                     }
                     else if(ack.getSeq() == -1)
                     {
@@ -399,54 +387,21 @@ public class FileTransfer
                     throw new UnsupportedOperationException();
             }
         }
-        catch (InvalidPathException ex)
+        catch (InvalidPathException | IOException | ClassNotFoundException | NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException | IllegalBlockSizeException | BadPaddingException ex)
         {
             Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (IOException ex) {
-            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (ClassNotFoundException ex) {
-            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
         }
-
     }
     
-    public static byte[] getCRC32(byte[] data)
-    {
-        // cast to int to get rid of not needed bits (the method returns  along)
-        int CRC = (int)generateCRC32(data);
-        // create new array to hold CRC bytes to send back
-        byte[] new_bytes = new byte[4];
-        // used for shifting purposes
-        int[] shifts = {24,16,8}; 
-        // get bytes to send back to server
-        for(int i = 0; i < shifts.length; i++)
-            new_bytes[i] = shiftByte2Right(CRC, shifts[i]);
-        // return 4 bytes of the crc
-        return new_bytes;
-    }
-    
-    static long generateCRC32(byte[] bytes)
+    static int generateCRC32(byte[] bytes)
     {
         // create object
         CRC32 check_sum = new CRC32();
         // generat crc32 based off bytes
         check_sum.update(bytes);
         // retun value of the crc32
-        return check_sum.getValue();
+        return (int) check_sum.getValue();
     }
-   
-    static byte shiftByte2Right(int original_byte, final int shift_size)
-    {
-        // shift bytes to the right by this amount
-        return  (byte) (original_byte >> shift_size);
-    }
-    
-    static byte xorBytes(byte first, byte second)
-    {
-        // xor both bytes
-        return first ^= second;
-    }
-    
 }
 
 
