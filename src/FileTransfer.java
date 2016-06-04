@@ -137,7 +137,14 @@ public class FileTransfer
         PrivateKey prkey = null;
         Cipher cipher = null;
         StartMessage start_message = null;
-        Key unwrapped_key = null;
+        Chunk chunk = null;
+        SecretKey skey = null;
+        int expected_seq = 0;
+        byte[] data = null;
+        
+        
+        
+        
         // start server on port number
         try (ServerSocket serverSocket = new ServerSocket(Integer.parseInt(port))) 
         {  
@@ -195,14 +202,92 @@ public class FileTransfer
                                 // unwrap (decrypt) private key setup
                                 cipher.init(Cipher.UNWRAP_MODE, prkey);
                                 // unwrap encrypted key to get unencrypted AES key
-                                unwrapped_key = cipher.unwrap(start_message.getEncryptedKey(), "RSA", Cipher.PRIVATE_KEY);
+                                skey = (SecretKey) cipher.unwrap(start_message.getEncryptedKey(), "AES", Cipher.SECRET_KEY);
                                 // assuming everything is proper, send ack back to client
                                 out_object_stream.writeObject(new AckMessage(INITIAL_ACK));
+                                // incremement to next switch statement should be chunk
+                                // and the chunk houldbe expecting the next seq
+                                expected_seq++;
                             }
                             break;     
                         case STOP:
+                            // send -1 ack
+                            out_object_stream.writeObject(new AckMessage(ERR_ACK));
+                            // set bools to false to end loops
+                            //***********************************************************do we end both or jsut one?
+                            inner_loop = false;
+                            //outter_loop = false;
                             break;
                         case CHUNK:
+                            // convert message to proper object
+                            chunk = (Chunk) message;
+                            // check if chunk is the proper expected seq
+                            if(chunk.getSeq() == expected_seq)
+                            {
+                                // decrypt the data from the chunk
+                                data = decryptData("AES", skey, chunk.getData());
+                                // calculat crc32 value
+                                int crc = generateCRC32(data);
+                                // compare the value
+                                try
+                                {
+                                    // if crc values do not match
+                                    if(crc != chunk.getCrc())
+                                    {
+                                        throw new InvalidCRCException("Invalid CRC");
+                                    }
+                                    // the crc values match
+                                    else
+                                    {
+                                        // check if the seq number recieved is the expected one
+                                        if(expected_seq != chunk.getSeq())
+                                        {
+                                           throw new InvalidSeqException("Invalid Seq: " + chunk.getSeq());
+                                        }
+                                        // the seq number is the correct one
+                                        else
+                                        {
+                                            //****************************************************************HOW TO STORE DATA?
+                                            // increment for the next sequence number
+                                            expected_seq++;
+                                            // send ack with the next seq
+                                            out_object_stream.writeObject(new AckMessage(expected_seq));
+                                        }
+                                        
+                                        /*
+                                        
+                                                                                    For example: the first chunk sent by the client is chunk 0 and the server expects chunk 0. If the server
+                                            accepts chunk 0, it responds to the client with ACK 1. Otherwise, it responds to the client with ACK
+                                            0.
+                                            Assuming it was accepted, the client would then send chunk 1. The server recognizes chunk 1 arrives
+                                            and it expected chunk 1 so it attempts to accept. If it accepts the chunk, it sends back ACK 2,
+                                            otherwise it sends ACK 1.
+                                            Once the final chunk has been accepted, the transfer is complete. The client recognizes this when the
+                                            server responds with ACK n (where n is the total number of chunks in the file).
+                                        */
+                                        
+                                        
+                                        
+                                    }
+                                }
+                                catch(InvalidCRCException ex)
+                                {
+                                    Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+                                    inner_loop = false;
+                                }
+                                
+  
+                                
+                                
+                            }
+                            else
+                            {
+                                
+                            }
+                            
+                            
+                            
+                            
                             break;
                         // unknown object sent
                         default:
@@ -246,24 +331,10 @@ public class FileTransfer
         
         try 
         {
-            // read in public key file
-            in_object = new ObjectInputStream(new FileInputStream(new File(pu_filename)));
-            // create object based off public key stream
-            pukey = (PublicKey) in_object.readObject();
-            // generator created for AES
-            keygen = KeyGenerator.getInstance("AES");
-            // set key size in bits
-            keygen.init(256);
-            // generate AES session key
-            skey = keygen.generateKey();
-            // set cipher for AES
-            cipher = Cipher.getInstance("RSA");
-            // set cipher to wrap public key
-            cipher.init(Cipher.WRAP_MODE, pukey);
-            // wrap the aes session key (encrypt the aes key using rsa public key)
-            cipher.wrap(skey);
-            // get the encrypted aes key
-            enkey = cipher.doFinal();                  
+            // generate session key
+            skey = generateAESKey("AES", 256);
+            // wrap session key with server's public key
+            enkey = wrapSecretKey(pu_filename, "RSA", skey);    
             // ask user for path of file tosend over to server
             System.out.println("Please enter path of file: ");
             // get path as string
@@ -298,7 +369,7 @@ public class FileTransfer
             message = (Message) in_object.readObject();
         }
         // catches anyone of these exceptions
-        catch (NoSuchAlgorithmException | InvalidKeyException | IOException | ClassNotFoundException | NoSuchPaddingException | IllegalBlockSizeException | BadPaddingException | InvalidPathException ex)
+        catch (IOException | ClassNotFoundException | InvalidPathException ex)
         {
             Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
         }
@@ -327,15 +398,14 @@ public class FileTransfer
                         {
                             Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
                         }
-                        
-                        
-                        
                         // create temp array to hold the chunk size
                         byte[] temp = new byte[chunksize];
                         // used to hold the crc32 value
                         int crc32 = 0;
                         // chunk object to send to server
                         Chunk chunk = null;
+                        // previous chunk************************************************************
+                        Chunk prev_chunk = null;
                         // counter used to keep track of the chunk elements
                         int counter = 0;
                         // loop the size of the file
@@ -349,14 +419,17 @@ public class FileTransfer
                                 temp[counter++] = bfile[i];
                                 // get crc32
                                 crc32 = generateCRC32(temp);
+                                // encrypt data
+                                temp = encryptData("AES", skey, temp);
                                 // set cipher to deal with aes
                                 cipher = Cipher.getInstance("AES");
                                 // set cipher for wrapping mode using the AESkey
-                                cipher.init(Cipher.WRAP_MODE, skey);
+                                cipher.init(Cipher.ENCRYPT_MODE, skey);
                                 // encrypt this data into new byte array
                                 temp = cipher.doFinal(temp);
                                 //init chunk object
                                 chunk = new Chunk(++seq, temp, crc32);
+                                /// dofinel for encrypt / decrypt, wrap for keys, and use a preve chunk to keep track of hcunks*************
                                 // send chunk
                                 out_object.writeObject(chunk);
                                 // read in next message
@@ -366,12 +439,14 @@ public class FileTransfer
                                 {
                                     // the message is a ACK
                                     case ACK:
+                                        //********************************************************************************************need seq testting
                                         System.out.println("Chunk number: " + ((AckMessage)message).getSeq());
                                         break;
                                     // anything else is incorrect
                                     default:
                                        throw new UnsupportedOperationException();
                                 }   
+                                counter = 0;
                             }
                             else
                                 temp[counter++] = bfile[i];
@@ -402,6 +477,172 @@ public class FileTransfer
         // retun value of the crc32
         return (int) check_sum.getValue();
     }
+    
+    static SecretKey generateAESKey(String type, int bitsize)
+    {
+        Cipher cipher = null;
+        SecretKey skey = null;
+        KeyGenerator keygen = null;
+        try {
+            // generator created for AES
+            keygen = KeyGenerator.getInstance(type.toUpperCase().trim());
+        } catch (NoSuchAlgorithmException ex) {
+            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        // set key size in bits
+        keygen.init(bitsize);
+        // generate AES session key and return it
+        return keygen.generateKey();
+    }
+    
+    static byte[] wrapSecretKey(String path, String type, SecretKey skey )
+    {
+        ObjectInputStream in_object = null;
+        PublicKey pukey = null;
+        Cipher cipher = null;
+        byte[] temp = null;
+        
+        try 
+        {
+            // read in public key file
+            in_object = new ObjectInputStream(new FileInputStream(new File(path)));
+            // create object based off public key stream
+            pukey = (PublicKey) in_object.readObject();
+            // set cipher for AES
+            cipher = Cipher.getInstance(type.toUpperCase().trim());
+            // set cipher to wrap public key
+            cipher.init(Cipher.WRAP_MODE, pukey);
+            // wrap the aes session key (encrypt the aes key using rsa public key
+            temp = cipher.wrap(skey);
+        } 
+        catch (NoSuchAlgorithmException | NoSuchPaddingException | ClassNotFoundException | InvalidKeyException | IOException | IllegalBlockSizeException ex) 
+        {
+            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        // return the encrypted key
+        return temp;     
+    }
+    
+    static byte[] encryptData(String instance, Key key, byte[] data)
+    {
+        Cipher cipher = null;
+        byte[] temp = null;
+        
+        try 
+        {
+            // set cipher to deal with aes
+            cipher = Cipher.getInstance(instance.toUpperCase().trim());
+            // set cipher for wrapping mode using the AESkey
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            // encrypt this data into new byte array
+            temp = cipher.doFinal(data);
+        } 
+        catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException | IllegalBlockSizeException | BadPaddingException ex) 
+        {
+            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        finally
+        {
+            return temp;
+        }
+    }
+    
+    static byte[] decryptData(String instance, Key key, byte[] data)
+    {
+        Cipher cipher = null;
+        byte[] temp = null;
+        
+        try 
+        {
+            // set cipher to deal with aes
+            cipher = Cipher.getInstance(instance.toUpperCase().trim());
+            // set cipher for wrapping mode using the AESkey
+            cipher.init(Cipher.DECRYPT_MODE, key);
+            // encrypt this data into new byte array
+            temp = cipher.doFinal(data);
+        } 
+        catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException | IllegalBlockSizeException | BadPaddingException ex) 
+        {
+            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        finally
+        {
+            return temp;
+        }
+    }
+    
+    
+    
+    public static class InvalidCRCException extends RuntimeException //Exception
+    {   
+        //private static final long serialVersionUID = 1997753363232807009L;
+
+        public InvalidCRCException(String message)
+        {
+            super(message);
+        }
+
+        public InvalidCRCException(Throwable cause)
+        {
+           super(cause);
+        }
+        /*
+        public CustomException(String message, Throwable cause)
+        {
+            super(message, cause);
+        }
+
+        public CustomException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace)
+        {
+            super(message, cause, enableSuppression, writableStackTrace);
+
+        }
+        */
+    }
+
+    
+    
+    
+    public static class InvalidSeqException extends RuntimeException //Exception
+    {   
+        //private static final long serialVersionUID = 1997753363232807009L;
+
+        public InvalidSeqException(String message)
+        {
+            super(message);
+        }
+
+        public InvalidSeqException(Throwable cause)
+        {
+           super(cause);
+        }
+        /*
+        public CustomException(String message, Throwable cause)
+        {
+            super(message, cause);
+        }
+
+        public CustomException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace)
+        {
+            super(message, cause, enableSuppression, writableStackTrace);
+
+        }
+        */
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 }
 
 
