@@ -3,11 +3,14 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.security.InvalidKeyException;
 import java.security.Key;
@@ -29,8 +32,6 @@ import javax.crypto.SecretKey;
 
 //************************************************************CLOSE FILES AND OBJECT STREAMS
 
-//*************************************************************EXCEPTION CATCHING FOR THROW NEW ETC
-
 public class FileTransfer 
 {
     // needed static variables
@@ -39,7 +40,6 @@ public class FileTransfer
     static final String OPTION_3 = "client";
     static final int INITIAL_ACK = 0;
     static final int ERR_ACK = -1;
-    static final String OUTPUT_FILE_NAME = "data.txt";
         
     public static void main(String[] args) 
     {
@@ -145,9 +145,6 @@ public class FileTransfer
         int rec_counter = 0;
         int file_size = 0;
         float num_of_chunks = 0;
-        Message message = null;
-        String filename = null;
-        
         
         System.out.println("Start server");
         
@@ -163,6 +160,8 @@ public class FileTransfer
             while(outter_loop)
             {
                 System.out.println("Start server inner loop");
+                
+                
                 // wait for client to connect
                 socket = serverSocket.accept();
                 // set loop bool back to true for this user
@@ -179,8 +178,10 @@ public class FileTransfer
                 while(inner_loop)
                 {
                     System.out.println("Server inner loop");
+                    
+                    
                     // server will read in object of Message
-                    message = (Message) in_object_stream.readObject();
+                    Message message = (Message) in_object_stream.readObject();
                     
                     System.out.println("server get message");
                     
@@ -189,17 +190,17 @@ public class FileTransfer
                     {
                         // if message is a disconnect message
                         case DISCONNECT:
+                            
                             System.out.println("server discoect message");
                             
                             // disconnect inner loop
                             inner_loop = false;
-                            //*************************************************************8does break break switch or loop?
                             // close server
                             socket.close();
                             // close streams
                             in_object_stream.close();
                             out_object_stream.close();
-                            throw new ClientDisconnected("DISCONNECT MESSAGE FROM SERVERS");
+                            break;
                         // if message is a disconnect message
                         case START:
                             
@@ -210,8 +211,11 @@ public class FileTransfer
                             // checks for validity 
                             // if any of these conditions are true
                             // something is not right
-                            if(start_message.getChunkSize() == 0 || start_message.getEncryptedKey().length == 0 || start_message.getFile() == null)
+                            if( start_message.getChunkSize() == 0 || 
+                                start_message.getEncryptedKey().length == 0 || 
+                                start_message.getFile() == null )
                             {
+                                
                                 System.out.println("server bad message");
                                 // send to client a -1 ack meaning error
                                 out_object_stream.writeObject(new AckMessage(ERR_ACK));
@@ -243,8 +247,6 @@ public class FileTransfer
                                 
                                 // save file size
                                 file_size = (int)start_message.getSize();
-                                // set filename
-                                filename = start_message.getFile();
                                 // create btye array of size of file
                                 rec_file = new byte[file_size];
                                 //  calculate number of chunks
@@ -355,51 +357,66 @@ public class FileTransfer
         // declare needed objects
         ObjectInputStream in_object = null;
         ObjectOutputStream out_object = null;
+        InputStream in = null;
+        OutputStream out = null;
+        PrivateKey prkey = null;
+        PublicKey pukey = null;
+        Cipher cipher = null;
+        KeyGenerator keygen = null;
         byte[] enkey = null;
         Scanner scanner = new Scanner(System.in);
         //Path filepath = null;
         String location = null;
         int chunksize = 1024;
-        StartMessage start_message = null;
+        StartMessage start_message;
         Socket socket = null;
         Message message = null;
         AckMessage ack = null;
         byte[] bfile = null;
         File file = null;
+        //SecretKey skey = null;
         Key skey = null;
+        File filelocation = null;
         int seq = -1;
-        Chunk chunk = null;
-        // previous chunk*******************************************************************************
-        Chunk prev_chunk = null;
+        float num_of_chunks = 0;
         
         try 
         {
-            // create socket with port number  
-            socket = new Socket(host, Integer.parseInt(port));
-            // create streams
-            out_object = new ObjectOutputStream(socket.getOutputStream());
-            in_object = new ObjectInputStream(socket.getInputStream());
+            System.out.println("client start");
+            
             // check if key exist
             file = new File(pu_filename);
             if (!file.exists())
+            {
                 throw new FileNotFoundException(file.getAbsolutePath());
+                //return;
+            }
             // generate session key
             skey = generateAESKey("AES", 256);
             // wrap session key with server's public key
             enkey = wrapSecretKey(pu_filename, "RSA", skey); 
-            // ask user for path of file to send over to server
+            
+             //********************************************************************check if key file exist
+            // ask user for path of file tosend over to server
             System.out.println("Please enter file name: ");
             // get path as string
-           // location = scanner.nextLine();
+           //                            location = scanner.nextLine();
            location = "test.txt";
             // set string of path to file object, this is to check if it exist
-            file = new File(location);
+            filelocation = new File(location);
             // check if location exist
-            if(!file.exists())
+            // if it does not
+            if(!filelocation.exists())
                 // throw exception
-                throw new FileNotFoundException(file.getAbsolutePath());
+                throw new FileNotFoundException(filelocation.getAbsolutePath());
+            
+            System.out.println("client file exist");
+            
             // use string object to create byte array of that file
             bfile = Files.readAllBytes(Paths.get(location));
+            
+                        System.out.println("client read in file as bytes");
+            
             // ask user the chunk size for the file transfer
             System.out.println("Please enter desired file chunk size in bytes: ");
             // read in size
@@ -408,96 +425,187 @@ public class FileTransfer
             // if size is less than 0
             if(chunksize < 1)
                 // throw exception
-                throw new InvalidSizeException("Chunk size to small");
+                throw new UnsupportedOperationException();
+            // set the number of chunks
+            num_of_chunks = (filelocation.length() / chunksize);
+            System.out.println("client FILE SIZE: " + filelocation.length());
+            System.out.println("client CHUNK SIZE: " + (filelocation.length() / chunksize));
+                        System.out.println("client before start");
+            
+            // create a new start message
+            start_message = new StartMessage(location, enkey, chunksize);
+            
+                        System.out.println("client after start");
+            
+            // create socket with port number  
+            socket = new Socket(host, Integer.parseInt(port));
+            
+                        System.out.println("client cfreated  socket");
+            
+            // create streams
+            out_object = new ObjectOutputStream(socket.getOutputStream());
+            in_object = new ObjectInputStream(socket.getInputStream());
+            
+            
+                        System.out.println("client before sending start");
             // send start message to server 
-            out_object.writeObject(new StartMessage(location, enkey, chunksize));
+            out_object.writeObject(start_message);
+            
+            
+            System.out.println("client after  sending start");
+            
+            
             // the reply back from server (should have init seq of 0)
-            ack = (AckMessage) in_object.readObject();
-            // if seq num = -1 means stop transfer
-            if(ack.getSeq() == -1)
+            message = (Message) in_object.readObject();
+            
+            System.out.println("client got mesage back from server");
+        }
+        // catches anyone of these exceptions
+        catch (IOException | ClassNotFoundException | InvalidPathException ex)
+        {
+            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        
+        try
+        {
+            
+            System.out.println("client check mesage type");
+            
+            // check the server's reply for message type
+            // the init message
+            switch(message.getType()) 
             {
-                // close resources 
-                socket.close();
-                out_object.close();
-                in_object.close();
-                return;
-            }
-            // message is a ack of 0, meaning to start the transfer 
-            else if(ack.getSeq() == 0)
-            {
-                System.out.println("client ack = 0");
-                // record seq number
-                seq = ack.getSeq();
-                // create temp array to hold the chunk size
-                byte[] temp = new byte[chunksize];
-                // counter used to keep track of the chunk elements
-                int counter = 0;
-                System.out.println("client before only loop");
-                // loop the size of the file
-                for(int i = 0; i < bfile.length; i++)
-                {
-                    System.out.println("i: " + i + " count: " + counter);
-                    // the current byte is size of the chunk
-                    if(i % chunksize == 0 && i != 0)
+                // the message is a ACK
+                case ACK:
+                    System.out.println("client ack message ");
+                    
+                    ack = (AckMessage) message;
+                    
+                    
+                    // message is a ack of 0, meaning to start the transfer 
+                    if(ack.getSeq() == 0)
                     {
-                        // create chunk with current seq num, the data, and secret key
-                        chunk = createChunk(temp, seq, skey);
-                        // send the current chunk and retrieve the reply message
-                        ack = sendReceiveChunk(chunk, in_object, out_object);
-                        // check for error
-                        if(ack.getSeq() == -1)
+                        System.out.println("client ack = 0");
+                        
+                        // record seq number
+                        seq = ack.getSeq();
+                        // create temp array to hold the chunk size
+                        byte[] temp = new byte[chunksize];
+                        // used to hold the crc32 value
+                        int crc32 = 0;
+                        // chunk object to send to server
+                        Chunk chunk = null;
+                        // previous chunk*******************************************************************************
+                        Chunk prev_chunk = null;
+                        // counter used to keep track of the chunk elements
+                        int counter = 0;
+                        
+                        
+                        System.out.println("client before only loop");
+                        
+                        
+                        //calculate remainder
+                        int r = (int) (filelocation.length() % chunksize);
+                        // use totla to get position when remaidner is hit
+                        long pos =  filelocation.length();
+                        
+                        int i = 0;
+                        
+                        // loop the size of the file
+                        for(i = 0; i < bfile.length; i++)
                         {
-                            // close resources 
-                            socket.close();
-                            out_object.close();
-                            in_object.close();
-                            throw new ErrorSequenceNumberException("-1 Seq");
+                            
+                             System.out.println("i: " + i + " count: " + counter);
+                            
+                            // the current byte is size of the chunk
+                           // if((i % chunksize == 0 && i != 0) || (counter == (r-2) && i == (bfile.length - 1)))
+                            if(i % chunksize == 0 && i != 0)
+                            {
+                                System.out.println("clienthit chunk size");
+                                // get crc32
+                                crc32 = generateCRC32(temp);                         
+                                System.out.println("client crc calculated");
+                                // encrypt data
+                                temp = encryptData("AES", skey, temp);
+                                //init chunk object (seq is the next wanted ack)
+                                chunk = new Chunk(++seq, temp, crc32);
+                                System.out.println("encryped data and chunck created: seq: " + seq);
+                                /// do final for encrypt / decrypt, wrap for keys, and use a preve chunk to keep track of hcunks*************
+                                // send chunk
+                                out_object.writeObject(chunk);
+                                System.out.println("sent chunk");
+                                // read in next message
+                                message = (Message) in_object.readObject();
+                                System.out.println("client got message back");
+                                // check message type
+                                System.out.println("Chunks completed [" + ((AckMessage)message).getSeq() + "/" + num_of_chunks + "]");
+                                // reset counter for next chunk
+                                counter = 0;
+                                System.out.println("END TRNSFER: SEQ: " + ack.getSeq()  +"NUM OF CHUNKS: " + num_of_chunks);
+                                //if(((AckMessage)message).getSeq() == (int)num_of_chunks)
+                                   // System.out.println("LAST CHUNK:");
+                            }
+                            // not a perfect chunk
+                            else
+                                // keep adding data
+                                temp[counter++] = bfile[i];
                         }
-                        // increase the next seq number
-                        ++seq;
-                        // reset counter
-                        counter = 0;
+                        // if the file is not a perfect chunk, mean it has a remainder that is not the chunk size
+                        // send last chunk with remainding data
+                        //  temp[counter++] = bfile[i]; has been runnign but never hit the if statement
+                        // if(i % chunksize == 0 && i != 0)
+                        // so this wil lfill in the rest
+                        // in the change the chunksize and file size is even divisiable, the last stat
+                        // will be the if(i % chunksize == 0 && i != 0) before getting to this line
+                        // however that is why we check if(counter != 0)
+                        // since counter = 0 happens BEFORE leaving loop
+                        // so this check shouls prevent it from happening
+                        if(counter != 0)
+                        {
+                            System.out.println("clienthit chunk size");
+                            // get crc32
+                            crc32 = generateCRC32(temp);                         
+                            System.out.println("client crc calculated");
+                            // encrypt data
+                            temp = encryptData("AES", skey, temp);
+                            //init chunk object (seq is the next wanted ack)
+                            chunk = new Chunk(++seq, temp, crc32);
+                            System.out.println("encryped data and chunck created: seq: " + seq);
+                            /// do final for encrypt / decrypt, wrap for keys, and use a preve chunk to keep track of hcunks*************
+                            // send chunk
+                            out_object.writeObject(chunk);
+                            System.out.println("sent chunk");
+                            // read in next message
+                            message = (Message) in_object.readObject();
+                            System.out.println("client got message back");
+                            // check message type
+                            System.out.println("Chunks completed [" + ((AckMessage)message).getSeq() + "/" + num_of_chunks + "]");
+                            // reset counter for next chunk
+                            counter = 0;
+                            System.out.println("END TRNSFER: SEQ: " + ack.getSeq()  +"NUM OF CHUNKS: " + num_of_chunks);  
+                        }
+                        
+                        
+                
+            
+                        
+                        
                     }
-                    // not a perfect chunk
-                    else
-                        // keep adding data
-                        temp[counter++] = bfile[i];
-                }
-                // if the file is not a perfect chunk, mean it has a remainder that is not the chunk size
-                // send last chunk with remainding data
-                //  temp[counter++] = bfile[i]; has been runnign but never hit the if statement
-                // if(i % chunksize == 0 && i != 0)
-                // so this wil lfill in the rest
-                // in the change the chunksize and file size is even divisiable, the last stat
-                // will be the if(i % chunksize == 0 && i != 0) before getting to this line
-                // however that is why we check if(counter != 0)
-                // since counter = 0 happens BEFORE leaving loop
-                // so this check shouls prevent it from happening
-                if(counter != 0)
-                {
-                    // create chunk with current seq num, the data, and secret key
-                    chunk = createChunk(temp, seq, skey);
-                    // send the current chunk and retrieve the reply message
-                    message = sendReceiveChunk(chunk, in_object, out_object);
-                    // check for error
-                    if(ack.getSeq() == -1)
+                    else if(ack.getSeq() == -1)
                     {
                         // close resources 
                         socket.close();
                         out_object.close();
                         in_object.close();
-                        throw new ErrorSequenceNumberException("-1 Seq");
+                        throw new IllegalArgumentException();
                     }
-                     // increase the next seq number
-                     ++seq;
-                     // reset counter
-                     counter = 0;
-                }
-                // send stop message
-                out_object.writeObject(new StopMessage(OUTPUT_FILE_NAME));  
+                    break;
+                // any other type of message is unexpected 
+                default:
+                    throw new UnsupportedOperationException();
             }
-        } 
-        catch (IOException | ClassNotFoundException ex) 
+        }
+        catch (InvalidPathException | IOException | ClassNotFoundException ex)
         {
             Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
         }
@@ -511,84 +619,6 @@ public class FileTransfer
         check_sum.update(bytes);
         // retun value of the crc32
         return (int) check_sum.getValue();
-    }
-    
-    static void writeBytesToFile(String filename, byte[] data)
-    {
-        try 
-        {
-            Files.write(new File(filename).toPath(), data);
-        } 
-        catch (IOException ex) 
-        {
-            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        
-        /*
-        try 
-        {
-
-            FileOutputStream fs = new FileOutputStream(new File(filename));
-            BufferedOutputStream bs = new BufferedOutputStream(fs);
-            bs.write(data);
-            bs.close();
-        } 
-        catch (Exception e) 
-        {
-            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        */
-        
-        
-        /*
-        //below is the different part
-        File someFile = new File("java2.pdf");
-        FileOutputStream fos = new FileOutputStream(someFile);
-        fos.write(bytes);
-        fos.flush();
-        fos.close();
-        */
-        
-        /*
-        in_object = new ObjectInputStream(new FileInputStream(new File(pr_filename)));
-        */
-        
-    }
-    
-    static Chunk createChunk(byte[] temp, int seq, Key skey)
-    {
-        
-        System.out.println("clienthit chunk size");
-        int crc32 = generateCRC32(temp);
-        System.out.println("client crc calculated");
-        temp = encryptData("AES", skey, temp);
-        //Chunk chunk = new Chunk(seq, temp, crc32);
-        System.out.println("encryped data and chunck created: seq: " + seq);
-        return new Chunk(seq, temp, crc32);
-    }
-    
-    static AckMessage sendReceiveChunk(Chunk chunk, ObjectInputStream in_object, ObjectOutputStream out_object)
-    {
-        AckMessage ack = null;
-        
-        try 
-        {
-            // send chunk
-            out_object.writeObject(chunk);
-            System.out.println("sent chunk");
-            // read in next message
-            //message = (Message) in_object.readObject();
-            System.out.println("client got message back");
-            // check message type
-            //System.out.println("Chunks completed [" + ((AckMessage)message).getSeq() + "/" + num_of_chunks + "]");
-            //System.out.println("END TRNSFER: SEQ: " + ack.getSeq()  +"NUM OF CHUNKS: " + num_of_chunks);
-            ack = (AckMessage) in_object.readObject();
-        } 
-        catch (IOException | ClassNotFoundException ex) 
-        {
-            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        return ack;
     }
     
     static Key generateAESKey(String type, int bitsize)
@@ -684,45 +714,7 @@ public class FileTransfer
             return temp;
         }
     }
-    
-    public static class InvalidSizeException extends RuntimeException //Exception
-    {   
-        public InvalidSizeException(String message)
-        {
-            super(message);
-        }
 
-        public InvalidSizeException(Throwable cause)
-        {
-           super(cause);
-        }
-    }
-    
-    public static class ClientDisconnected extends RuntimeException //Exception
-    {   
-        public ClientDisconnected(String message)
-        {
-            super(message);
-        }
-
-        public ClientDisconnected(Throwable cause)
-        {
-           super(cause);
-        }
-    }
-    
-    public static class ErrorSequenceNumberException extends RuntimeException //Exception
-    {   
-        public ErrorSequenceNumberException(String message)
-        {
-            super(message);
-        }
-
-        public ErrorSequenceNumberException(Throwable cause)
-        {
-           super(cause);
-        }
-    }
 }
 
 
