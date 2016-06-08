@@ -222,6 +222,8 @@ public class FileTransfer
                     // <editor-fold desc="Start Message">
                     // if message is a start message
                     case START: 
+                        System.out.println("server sttart  message");
+
                         // cast object to StartMessage
                         start_message = (StartMessage) message;
                         // checks for validity 
@@ -281,10 +283,13 @@ public class FileTransfer
                     //if the message is a stop message
                     case STOP:
                     {
+                        System.out.println("server stop message");
                         try 
                         {
+                            //********************************************************************************************
                             // send -1 ack
-                            out_object_stream.writeObject(new AckMessage(ERR_ACK));
+                            System.out.println("ERROR");
+                            out_object_stream.writeObject(new AckMessage(44444));
                         } 
                         catch (IOException ex) 
                         {
@@ -292,11 +297,17 @@ public class FileTransfer
                         }
                         // set bools to false to end loops
                         inner_loop = false;
+                        
+                        //for(int i =0 ; i < rec_file.length; i++)
+                            // create file from bytes
+                            writeBytesToFile(filename, rec_file);
+                        
                         break;
                     }
                     // </editor-fold>
                     // <editor-fold desc="Chunk Message">
                     case CHUNK:
+                        System.out.println("server chunk message");
                         // convert message to proper object
                         chunk = (Chunk) message;
                         // decrypt the data from the chunk
@@ -321,8 +332,7 @@ public class FileTransfer
                         {
                             // using the counter and size of file from the startmessage step, add the data
                             for(int i = 0; i < data.length; i++)
-                                rec_file[rec_counter++] = data[i];
-                                                       
+                                rec_file[rec_counter++] = data[i];                  
                             // increment for the next sequence number
                             expected_seq++;
 
@@ -344,24 +354,31 @@ public class FileTransfer
                             {
                                 try 
                                 {
+                                    System.out.println("sendign last ack: " + expected_seq);
                                     out_object_stream.writeObject(new AckMessage(expected_seq));
                                 } 
                                 catch (IOException ex)
                                 {
                                     Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
                                 }
-                                 
+                                
+                                /*
                                 for(int i =0 ; i < rec_file.length; i++)
                                     // create file from bytes
                                     writeBytesToFile(filename, rec_file);
                                     // server will leave the while loop and go to outter loop for new ocnection
-                                inner_loop = false;
+                                //inner_loop = false;
+                                */
                             }
                         }
                     break;
                     // </editor-fold>
                 }
+                
+                System.out.println("server end inner loop");
             }
+            // <editor-fold desc="Closes">
+            System.out.println("server close ocnenctions");
             try 
             {
                // unhook resources
@@ -396,15 +413,14 @@ public class FileTransfer
         //Path filepath = null;
         String location = null;
         int chunksize = 1024;
-        StartMessage start_message = null;
         Socket socket = null;
-        Message message = null;
         AckMessage ack = null;
         byte[] bfile = null;
         File file = null;
         Key skey = null;
         int seq = -1;
         Chunk chunk = null;
+        boolean last_chunk;
         // </editor-fold>
         // <editor-fold desc="Open Socket/Streams">
         try 
@@ -444,8 +460,7 @@ public class FileTransfer
         // ask user for path of file to send over to server
         System.out.println("Please enter file name: ");
         // get path as string
-       // location = scanner.nextLine();
-       location = "test.txt";
+        location = scanner.nextLine();
         // set string of path to file object, this is to check if it exist
         file = new File(location);
         try 
@@ -525,7 +540,7 @@ public class FileTransfer
             // record seq number
             seq = ack.getSeq();
             // create temp arrays to hold the chunk size
-            byte[] temp = new byte[chunksize];//*********************************************
+            byte[] temp = new byte[chunksize];
             byte[] temp2 = null;
             // counter used to keep track of the chunk elements
             int counter = 0;
@@ -534,12 +549,15 @@ public class FileTransfer
             // get total chunks
             int total_chunks = (bfile.length / chunksize);
             total_chunks += (remainder >= 1) ? 1 : 0;
+            // set bool to true;
+            last_chunk = true;
             // loop the size of the file
             for(int i = 0; i < bfile.length; i++)
             {
                 // the current byte is size of the chunk
-                if((i % chunksize == 0) && i != 0)
+                if(((i % chunksize == 0) && i != 0))
                 {
+                    System.out.println("chunkkkk");
                     // create chunk 
                     chunk = createChunk(temp, seq, skey);    
                     try 
@@ -552,39 +570,42 @@ public class FileTransfer
                     catch (IOException | ClassNotFoundException ex) {
                         Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
                     }
+                    
                     // if this was last chunk
                     if(ack.getSeq() == total_chunks )
                     {
-                        System.out.println("TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT");
+                        System.out.println("last chunk@@@@");
                         try 
                         {
-                            // send disconnect message to client
-                            out_object.writeObject(new DisconnectMessage());
+                            // send stop message to client
+                            out_object.writeObject(new StopMessage(location));
+                            // wait for reply
+                            ack = (AckMessage) in_object.readObject();
+                            // check seq number
+                            if(ack.getSeq() == -1)
+                            {
+                                System.out.println("-1 seq ack!");
+                                break;
+                            }
                         } 
-                        catch (IOException ex) 
+                        catch (IOException | ClassNotFoundException ex) 
                         {
                             Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
                         }
+                        
+                        // if this was last chunk, set as false to not do work after loop
+                        last_chunk = false;
+                        // this will end current loop
                         break;
                     }
                     // check for error
-                    if(ack.getSeq() == -1)
+                    else if(ack.getSeq() == -1)
                     {
-                        try 
-                        {
-                            // close resources
-                            if(socket != null)
-                                socket.close();
-                            if(out_object != null)
-                                out_object.close();
-                            if(in_object != null)
-                                in_object.close();
-                            throw new ErrorSequenceNumberException("-1 Seq");
-                        } 
-                        catch (IOException ex) 
-                        {
-                            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-                        }
+                        System.out.println("bad seq");
+                        // this will cause the work outside loop to not enter
+                        last_chunk = false;
+                        // this will now stop what is happening
+                        break;
                     } 
                     // increment next seq numnber
                     ++seq;
@@ -594,62 +615,87 @@ public class FileTransfer
                 // put file byte into temp array
                 temp[counter++] = bfile[i];
             }
-            // temp array to hold a size other than chunk
-            temp2 = new byte[counter];
-            // copy elements over
-            System.arraycopy(temp, 0, temp2, 0, temp2.length);
             
+            System.out.println("end loop");
+            
+            
+            if(last_chunk)
+            {
+                System.out.println("llllllllllllllllllllllllllllllllast");
+                // temp array to hold a size other than chunk
+                temp2 = new byte[counter];
+                // copy elements over
+                System.arraycopy(temp, 0, temp2, 0, temp2.length);
+                try 
+                {
+                    // create chunk
+                    chunk = createChunk(temp2, seq, skey); 
+                    // send chunk
+                    out_object.writeObject(chunk);
+                    // read in next message
+                    ack = (AckMessage) in_object.readObject();
+                }
+                catch (IOException | ClassNotFoundException ex) 
+                {
+                    Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+                }
+               // that ack was the last one
+               // file transfer is done
+               
+               System.out.println("ack " + ack.getSeq() + " total: " + total_chunks);
+              
+               
+               if(ack.getSeq() == total_chunks)
+               {
+                   System.out.println("last chunk!!!");
+                   
+                    try 
+                    {
+                        // send stop message to client
+                        out_object.writeObject(new StopMessage(location));
+                        // wait for reply
+                        System.out.println(" waiting");
+                         System.out.println(" before ACK : " + ack.getSeq());
+                        ack = (AckMessage) in_object.readObject();
+                        System.out.println(" GOT ACK : " + ack.getSeq());
+                    } 
+                    catch (IOException | ClassNotFoundException ex) 
+                    {
+                        Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+                    }
+               }
+               // no need to check for seq == -1 since after this, the statement will jump
+               // out of the if statement back to the previous body which will do the socket closing
+               // this is also where the sockets will be closed if the seq == -1 happens within the
+               // earlier loop. the earlier loop is set that if seq == -1, to break from loop and set bool as false
+               // that bool will skip the if stat above and end up in this spot anyways, to clean up the resources
+            }
             try 
             {
-                // create chunk
-                chunk = createChunk(temp2, seq, skey); 
-                // send chunk
-                out_object.writeObject(chunk);
-                // read in next message
-                ack = (AckMessage) in_object.readObject();
-            }
-            catch (IOException | ClassNotFoundException ex) 
+                
+                System.out.println("clean up");
+                // clean up resources
+                if(socket != null)
+                    socket.close();
+                if(out_object != null)
+                    out_object.close();
+                if(in_object != null)
+                    in_object.close();
+            } 
+            catch (IOException ex) 
             {
                 Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
             }
-           // that ack was the last one
-           // file transfer is done
-           if(ack.getSeq() == total_chunks)
-           {
-               System.out.println("TTTTTTTTTTTTTTTTTTTESSSSSSSSSSSSSSSSSSSSTtt2222222222222");
-                try 
-                {
-                    // send disconnect message to client
-                    out_object.writeObject(new DisconnectMessage());
-                } 
-                catch (IOException ex) 
-                {
-                    Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-                }
-           }
-           // check for error
-           else if(ack.getSeq() == -1)
-           {
-                try 
-                {
-                    // close resources
-                    if(socket != null)
-                        socket.close();
-                    if(out_object != null)
-                        out_object.close();
-                    if(in_object != null)
-                        in_object.close();
-                    throw new ErrorSequenceNumberException("-1 Seq");
-                } 
-                catch (IOException ex) 
-                {
-                    Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-                }
-           } 
-
+            
+            
+            
+            
+            /*
+            7. After sending all chunks and receiving the final ACK, the transfer has completed and the client can
+either begin a new file transfer or disconnect.
+            */
         }
         // </editor-fold>
-
     }
     
     static int generateCRC32(byte[] bytes)
