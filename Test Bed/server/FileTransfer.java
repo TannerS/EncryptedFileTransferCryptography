@@ -278,6 +278,12 @@ public class FileTransfer
                         }
                         // set bools to false to end loops
                         inner_loop = false;
+                        
+                        
+                        // create file from bytes
+                        writeBytesToFile(filename, rec_file);
+                        
+                        
                         break;
                    // }
                     // </editor-fold>
@@ -408,8 +414,6 @@ public class FileTransfer
             {
                 Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
             }
-            // create file from bytes
-            writeBytesToFile(filename, rec_file);
             // </editor-fold>
         }
         // </editor-fold>
@@ -439,24 +443,25 @@ public class FileTransfer
         
         // </editor-fold>
         // <editor-fold desc="Open Socket/Streams">
-        try
-        {
-            // create socket with port number
-            socket = new Socket(host, Integer.parseInt(port));
-            System.out.println("Connected to server: " + socket.getInetAddress().toString());
-            // create streams
-            out_object = new ObjectOutputStream(socket.getOutputStream());
-            in_object = new ObjectInputStream(socket.getInputStream());
-        }
-        catch (IOException ex)
-        {
-            Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        // </editor-fold>
-        // <editor-fold desc="Open File">
         // loop so user can do the application multipel tines 
         do
         {
+            try
+            {
+                // create socket with port number
+                socket = new Socket(host, Integer.parseInt(port));
+                System.out.println("Connected to server: " + socket.getInetAddress().toString());
+                // create streams
+                out_object = new ObjectOutputStream(socket.getOutputStream());
+                in_object = new ObjectInputStream(socket.getInputStream());
+            }
+            catch (IOException ex)
+            {
+                Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+            }
+            // </editor-fold>
+            // <editor-fold desc="Open File">
+
             // default value
             answer = "yes";
             last_chunk = false;
@@ -727,7 +732,29 @@ public class FileTransfer
                     }
                 }
             }
-            // ask user if they wish to send another file
+
+            // that ack was the last one
+            // file transfer is done
+            if(ack.getSeq() == total_chunks)
+            {
+                try
+                {
+                    System.out.println("EQUALS");
+                    // send stop message to client
+                    out_object.writeObject(new StopMessage(location));
+                    System.out.println("sent");
+                    // wait for reply
+                    ack = (AckMessage) in_object.readObject();
+                    System.out.println("ACK");
+                }
+                catch (IOException | ClassNotFoundException ex)
+                {
+                    Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
+                }
+            }          
+        
+        
+                    // ask user if they wish to send another file
             System.out.print("Transfer another file? (yes / no): ");
             // consume any left over null terminator form the nextInt earlier used
             scanner.nextLine();
@@ -737,25 +764,8 @@ public class FileTransfer
             //answer = answer.toLowerCase().trim();
         // loop if user chooses to transfer another
         }while(!answer.equals("no"));
-        // that ack was the last one
-        // file transfer is done
-        if(ack.getSeq() == total_chunks)
-        {
-            try
-            {
-                System.out.println("EQUALS");
-                // send stop message to client
-                out_object.writeObject(new StopMessage(location));
-                System.out.println("sent");
-                // wait for reply
-                ack = (AckMessage) in_object.readObject();
-                System.out.println("ACK");
-            }
-            catch (IOException | ClassNotFoundException ex)
-            {
-                Logger.getLogger(FileTransfer.class.getName()).log(Level.SEVERE, null, ex);
-            }
-        }          
+        
+        
         // no need to check for seq == -1 since after this, the statement will jump
         // out of the if statement back to the previous body which will do the socket closing
         // this is also where the sockets will be closed if the seq == -1 happens within the
